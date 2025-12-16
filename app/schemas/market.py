@@ -1,3 +1,4 @@
+
 """Pydantic models for market-related responses."""
 
 from pydantic import BaseModel
