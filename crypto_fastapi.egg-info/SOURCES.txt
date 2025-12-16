@@ -1,0 +1,7 @@
+pyproject.toml
+app/__init__.py
+app/main.py
+crypto_fastapi.egg-info/PKG-INFO
+crypto_fastapi.egg-info/SOURCES.txt
+crypto_fastapi.egg-info/dependency_links.txt
+crypto_fastapi.egg-info/top_level.txt

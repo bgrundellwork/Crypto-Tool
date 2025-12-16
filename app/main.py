@@ -1,7 +1,11 @@
-from fastapi import FastAPI 
+from fastapi import FastAPI
 
-api = FastAPI()
+from app.api.market import router as market_router
 
-@api.get('/')
-def index():
-    return {"message": "Hello, World!"}
+app = FastAPI(title="Crypto Market API")
+app.include_router(market_router)
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"message": "Crypto Boom!"}
