@@ -12,7 +12,7 @@ COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
 async def fetch_raw_market_data(
     vs_currency: str = "usd",
     order: str = "market_cap_desc",
-    per_page: int = 10,
+    per_page: int = 25,
     page: int = 1,
     sparkline: bool = False,
 ) -> list[dict[str, Any]]:
