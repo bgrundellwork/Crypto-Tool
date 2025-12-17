@@ -12,6 +12,9 @@ from app.db.session import engine, Base
 from app.services.coingecko import fetch_raw_market_data
 from app.services.market_storage import store_market_snapshots
 
+# Scheduler
+from app.jobs.scheduler import start_scheduler
+
 
 app = FastAPI(title="Crypto Market API")
 
@@ -40,7 +43,12 @@ async def market_snapshot_loop():
 
 @app.on_event("startup")
 async def startup() -> None:
+    # Create tables if missing (market_snapshots, candles, etc.)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Start snapshot collection loop
     asyncio.create_task(market_snapshot_loop())
+
+    # Start candle ingestion scheduler
+    start_scheduler()
