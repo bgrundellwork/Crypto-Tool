@@ -208,11 +208,13 @@ async def run_backtest_on_candles(
     wins = sum(1 for t in trades if t["pnl_pct"] > 0)
     win_rate = (wins / len(trades)) * 100.0 if trades else 0.0
     mdd = _max_drawdown(equity) if len(equity) > 1 else 0.0
-
     for stats in regime_stats.values():
         t = max(1, stats["trades"])
         stats["win_rate"] = stats["wins"] / t
         stats["expectancy"] = stats["pnl"] / t
+
+    # ✅ make JSON-safe (defaultdict -> dict)
+    regime_stats_out = {k: dict(v) for k, v in regime_stats.items()}
 
     return {
         "status": "ok",
@@ -224,5 +226,5 @@ async def run_backtest_on_candles(
         "win_rate_pct": win_rate,
         "equity_curve": equity,
         "trade_list": trades,
-        "regime_stats": regime_stats,
+        "regime_stats": regime_stats_out,
     }

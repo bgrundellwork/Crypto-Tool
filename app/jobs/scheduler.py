@@ -110,19 +110,14 @@ _state = SchedulerState(tasks={}, per_job_lock={})
 async def _run_ingestion(symbol: str, interval: str) -> int:
     """
     Returns candles_inserted (int).
-    ADAPT THIS to your real ingestion entrypoint.
+    Uses your real ingestion entrypoint: ingest_latest(session, coin, interval)
     """
-    # Example expected signature:
-    # from app.services.ingestion.candles_ingestion import ingest_candles_from_snapshots
-    # async with session_factory() as session:
-    #     inserted = await ingest_candles_from_snapshots(session, symbol=symbol, interval=interval)
-    #     return int(inserted)
-
-    from app.services.ingestion.candles_ingestion import ingest_candles  # <-- CHANGE IF NEEDED
+    from app.services.ingestion.candles_ingestion import ingest_latest
 
     async with session_factory() as session:
-        inserted = await ingest_candles(session=session, symbol=symbol, interval=interval)
+        inserted = await ingest_latest(session=session, coin=symbol, interval=interval)
         return int(inserted) if inserted is not None else 0
+
 
 
 def _schedule_seconds_for(interval: str) -> int:

@@ -2,35 +2,30 @@
 from __future__ import annotations
 
 from sqlalchemy import text
-
 from app.db.session import engine
 
 
 async def ensure_db_primitives() -> None:
-    """
-    SQLite-friendly bootstrapping:
-    - Create indexes if missing
-    - Create UNIQUE index for candles(symbol, interval, open_time)
-      (acts as both integrity + performance)
-    """
     stmts = [
-        # Uniqueness for candles (also an index)
+        # Candles: uniqueness + fast range reads
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_candles_symbol_interval_open_time
-        ON candles(symbol, interval, open_time);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_candles_source_coin_interval_ts
+        ON candles(source, coin, interval, ts);
         """,
-        # Snapshot range reads
         """
-        CREATE INDEX IF NOT EXISTS ix_market_snapshots_symbol_timestamp
-        ON market_snapshots(symbol, timestamp);
+        CREATE INDEX IF NOT EXISTS ix_candles_coin_interval_ts
+        ON candles(coin, interval, ts);
         """,
-        # Optional extra index (only if you frequently filter without open_time)
+        # Snapshots: fast reads by coin/time
         """
-        CREATE INDEX IF NOT EXISTS ix_candles_symbol_interval
-        ON candles(symbol, interval);
+        CREATE INDEX IF NOT EXISTS ix_market_snapshots_coin_id_timestamp
+        ON market_snapshots(coin_id, timestamp);
         """,
     ]
 
     async with engine.begin() as conn:
         for s in stmts:
-            await conn.execute(text(s))
+            try:
+                await conn.execute(text(s))
+            except Exception as e:
+                print(f"⚠️ DB bootstrap skipped a statement due to schema mismatch: {e}")

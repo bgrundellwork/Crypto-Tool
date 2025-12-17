@@ -1,85 +1,110 @@
 # app/config/settings.py
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Dict, List, Optional
 
 
-def parse_csv(value: str | None, default: List[str]) -> List[str]:
-    if not value:
+def parse_csv(s: str | None) -> List[str]:
+    if not s:
+        return []
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+def parse_bool(s: str | None, default: bool) -> bool:
+    if s is None:
         return default
-    items = [x.strip() for x in value.split(",")]
-    return [x for x in items if x]
+    return s.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def parse_bool(value: str | None, default: bool) -> bool:
-    if value is None:
+def parse_int(s: str | None, default: int) -> int:
+    try:
+        return int(s) if s is not None else default
+    except Exception:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def parse_int(value: str | None, default: int) -> int:
-    if value is None or value.strip() == "":
+def parse_float(s: str | None, default: float) -> float:
+    try:
+        return float(s) if s is not None else default
+    except Exception:
         return default
-    return int(value)
 
 
-def parse_schedule_seconds(value: str | None) -> Optional[Dict[str, int]]:
+def parse_schedule_map(s: str | None) -> Optional[Dict[str, int]]:
     """
-    Supports:
-      - JSON: {"1m":30,"5m":120}
-      - CSV map: "1m=30,5m=120,15m=300"
+    Optional env format:
+      INGEST_SCHEDULE_SECONDS="5m=30,15m=60,1h=300"
     """
-    if not value:
+    if not s:
         return None
 
-    v = value.strip()
-    if v.startswith("{"):
-        data = json.loads(v)
-        return {str(k): int(v) for k, v in data.items()}
-
     out: Dict[str, int] = {}
-    for part in v.split(","):
-        part = part.strip()
-        if not part:
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    for p in parts:
+        if "=" not in p:
             continue
-        if "=" not in part:
-            raise ValueError(f"Bad INGEST_SCHEDULE_SECONDS part: {part}")
-        k, val = part.split("=", 1)
-        out[k.strip()] = int(val.strip())
-    return out
+        k, v = p.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            continue
+        try:
+            out[k] = int(v)
+        except Exception:
+            continue
+
+    return out or None
 
 
 @dataclass(frozen=True)
 class Settings:
-    MARKET_DB_URL: str
-    INGEST_ENABLED: bool
-    INGEST_COINS: List[str]
-    INGEST_INTERVALS: List[str]
-    INGEST_SCHEDULE_SECONDS: Optional[Dict[str, int]]
-    INGEST_LOOKBACK_DAYS: int
-    SCHEDULER_LOCK_PATH: str
+    # -------------------------
+    # DB
+    # -------------------------
+    MARKET_DB_URL: str = field(default_factory=lambda: os.getenv("MARKET_DB_URL", "sqlite+aiosqlite:///./market.db"))
 
-    @staticmethod
-    def from_env() -> "Settings":
-        return Settings(
-            MARKET_DB_URL=os.getenv("MARKET_DB_URL", "sqlite+aiosqlite:///./market.db"),
-            INGEST_ENABLED=parse_bool(os.getenv("INGEST_ENABLED"), True),
-            INGEST_COINS=parse_csv(os.getenv("INGEST_COINS"), ["bitcoin"]),
-            INGEST_INTERVALS=parse_csv(os.getenv("INGEST_INTERVALS"), ["15m"]),
-            INGEST_SCHEDULE_SECONDS=parse_schedule_seconds(os.getenv("INGEST_SCHEDULE_SECONDS")),
-            INGEST_LOOKBACK_DAYS=parse_int(os.getenv("INGEST_LOOKBACK_DAYS"), 3),
-            SCHEDULER_LOCK_PATH=os.getenv("SCHEDULER_LOCK_PATH", "./scheduler.lock"),
-        )
+    # -------------------------
+    # Candle ingestion
+    # -------------------------
+    INGEST_ENABLED: bool = field(default_factory=lambda: parse_bool(os.getenv("INGEST_ENABLED"), True))
+
+    # IMPORTANT: use default_factory so this is not treated as a mutable default
+    INGEST_COINS: List[str] = field(
+        default_factory=lambda: parse_csv(os.getenv("INGEST_COINS", "bitcoin,ethereum,solana"))
+    )
+
+    INGEST_INTERVALS: List[str] = field(
+        default_factory=lambda: parse_csv(os.getenv("INGEST_INTERVALS", "5m,15m,1h"))
+    )
+
+    # Optional mapping, may be None
+    INGEST_SCHEDULE_SECONDS: Optional[Dict[str, int]] = field(
+        default_factory=lambda: parse_schedule_map(os.getenv("INGEST_SCHEDULE_SECONDS"))
+    )
+
+    INGEST_LOOKBACK_DAYS: int = field(default_factory=lambda: parse_int(os.getenv("INGEST_LOOKBACK_DAYS"), 3))
+
+    SCHEDULER_LOCK_PATH: str = field(default_factory=lambda: os.getenv("SCHEDULER_LOCK_PATH", "./scheduler.lock"))
+
+    # -------------------------
+    # Snapshot collection
+    # -------------------------
+    SNAPSHOT_ENABLED: bool = field(default_factory=lambda: parse_bool(os.getenv("SNAPSHOT_ENABLED"), True))
+    SNAPSHOT_INTERVAL_SECONDS: int = field(default_factory=lambda: parse_int(os.getenv("SNAPSHOT_INTERVAL_SECONDS"), 60))
+    SNAPSHOT_MAX_RETRIES: int = field(default_factory=lambda: parse_int(os.getenv("SNAPSHOT_MAX_RETRIES"), 5))
+    SNAPSHOT_BACKOFF_BASE_SECONDS: int = field(
+        default_factory=lambda: parse_int(os.getenv("SNAPSHOT_BACKOFF_BASE_SECONDS"), 1)
+    )
+    SNAPSHOT_JITTER_SECONDS: float = field(default_factory=lambda: parse_float(os.getenv("SNAPSHOT_JITTER_SECONDS"), 0.5))
+    SNAPSHOT_STALE_THRESHOLD_MINUTES: int = field(
+        default_factory=lambda: parse_int(os.getenv("SNAPSHOT_STALE_THRESHOLD_MINUTES"), 10)
+    )
+    SNAPSHOT_LOCK_PATH: str = field(default_factory=lambda: os.getenv("SNAPSHOT_LOCK_PATH", "./snapshot.lock"))
 
 
-_settings: Settings | None = None
-
-
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    global _settings
-    if _settings is None:
-        _settings = Settings.from_env()
-    return _settings
+    return Settings()

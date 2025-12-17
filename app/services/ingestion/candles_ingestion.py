@@ -1,3 +1,4 @@
+# app/services/ingestion/candles_ingestion.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -33,7 +34,7 @@ async def upsert_candles(session: AsyncSession, rows: list[dict[str, Any]]) -> i
     if not rows:
         return 0
 
-    values = []
+    values: list[dict[str, Any]] = []
     for r in rows:
         values.append(
             {
@@ -86,3 +87,34 @@ async def ingest_latest(session: AsyncSession, coin: str, interval: str) -> int:
     await session.commit()
     return n
 
+
+async def ingest_range(
+    session: AsyncSession,
+    coin: str,
+    interval: str,
+    start_ts: datetime,
+    end_ts: datetime,
+) -> int:
+    """
+    Ingest a bounded time window [start_ts, end_ts) built from snapshots.
+
+    NOTE: get_candles() currently supports start_ts; we filter end_ts here.
+    """
+    source = "local"
+
+    start_ts = _to_utc(start_ts)
+    end_ts = _to_utc(end_ts)
+
+    candles = await get_candles(coin=coin, interval=interval, start_ts=start_ts)
+
+    # Filter to [start_ts, end_ts)
+    candles = [c for c in candles if start_ts <= _to_utc(c["timestamp"]) < end_ts]
+
+    for c in candles:
+        c["coin"] = coin
+        c["interval"] = interval
+        c["source"] = source
+
+    n = await upsert_candles(session, candles)
+    await session.commit()
+    return n
