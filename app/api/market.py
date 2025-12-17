@@ -11,6 +11,7 @@ from app.services.regime import classify_regime
 from app.services.vwap import calculate_vwap
 from app.services.signal_engine import compute_signal
 from app.services.vov import calculate_vov_from_atr, classify_vov
+from app.config.timeframes import TIMEFRAME_PROFILES
 
 
 
@@ -222,49 +223,64 @@ async def get_market_vwap(
 @router.get("/signal")
 async def get_market_signal(
     coin: str,
-    interval: str = "5m",
-    ema_period: int = 50,
-    atr_period: int = 14,
-    z_window: int = 48,
+    interval: str = "15m",
 ):
-    """
-    Institutional signal engine (bias + constraints).
-    Example: /market/signal?coin=bitcoin&interval=5m
-    """
+    profile = TIMEFRAME_PROFILES.get(interval)
+
+    if not profile:
+        return {
+            "error": "Unsupported interval",
+            "supported": list(TIMEFRAME_PROFILES.keys()),
+            "received": interval,
+        }
+
+    ema_period = profile["ema"]
+    atr_period = profile["atr"]
+    z_window = profile["z"]
+    vov_window = profile["vov"]
+
     candles = await get_candles(coin, interval)
 
-    # Guards
-    if len(candles) < max(ema_period, atr_period + 1, z_window + 1) + 5:
+    # Guard: ensure enough candles for indicators
+    required = max(ema_period, atr_period + 1, z_window + 1) + 5
+    if len(candles) < required:
         return {
-            "error": "Not enough candle data for requested parameters",
-            "required_min_candles": max(ema_period, atr_period + 1, z_window + 1) + 5,
+            "error": "Not enough candle data for requested interval/profile",
+            "interval": interval,
+            "required_min_candles": required,
             "received": len(candles),
         }
 
     closes = [c["close"] for c in candles]
     price = closes[-1]
 
-    # EMA (trend)
+    # EMA
     ema_series = calculate_ema(closes, ema_period)
     ema = ema_series[-1]
 
-    # ATR (risk)
+    # ATR
     atr_series = calculate_atr(candles, atr_period)
     atr = atr_series[-1]
 
-    # Z-score on returns (momentum)
+    # Z-score
     returns = closes_to_returns(closes)
     z_series = calculate_zscore(returns, z_window)
     z = z_series[-1]
 
-    # Regime classification
+    # Regime
     regime = classify_regime(price=price, ema=ema, atr=atr, zscore=z)
 
-    # VWAP (last value)
+    # VWAP (last)
     vwap_series = calculate_vwap(candles)
     vwap = vwap_series[-1]["vwap"]
 
-    # Final signal engine
+    # VoV
+    vov_value = calculate_vov_from_atr(atr_series, window=vov_window)
+    vov_state = "stable"
+    if vov_value is not None:
+        vov_state = classify_vov(vov_value, atr)
+
+    # Signal engine
     return compute_signal(
         coin=coin,
         interval=interval,
@@ -274,36 +290,5 @@ async def get_market_signal(
         price=price,
         vwap=vwap,
         atr=atr,
+        vov_state=vov_state,
     )
-
-@router.get("/vov")
-async def get_market_vov(
-    coin: str,
-    interval: str = "5m",
-    atr_period: int = 14,
-    vov_window: int = 20,
-):
-    """
-    Volatility of Volatility (VoV) based on ATR instability.
-    Example: /market/vov?coin=bitcoin&interval=5m&atr_period=14&vov_window=20
-    """
-    candles = await get_candles(coin, interval)
-    atr_series = calculate_atr(candles, atr_period)
-
-    vov = calculate_vov_from_atr(atr_series, vov_window)
-    if vov is None:
-        return []
-
-    latest_atr = atr_series[-1]
-    state = classify_vov(vov, latest_atr)
-
-    return {
-        "coin": coin,
-        "interval": interval,
-        "atr_period": atr_period,
-        "vov_window": vov_window,
-        "atr": latest_atr,
-        "vov": vov,
-        "vov_ratio": (vov / latest_atr) if latest_atr else 0.0,
-        "vov_state": state,
-    }

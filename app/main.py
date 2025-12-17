@@ -1,13 +1,29 @@
 from fastapi import FastAPI
 import asyncio
 
+# Routers
 from app.api.market import router as market_router
+from app.api.backtest import router as backtest_router
+
+# Database
 from app.db.session import engine, Base
-from app.db import models  # registers tables
+
+# Services
 from app.services.coingecko import fetch_raw_market_data
 from app.services.market_storage import store_market_snapshots
 
+
 app = FastAPI(title="Crypto Market API")
+
+
+# Register routers
+app.include_router(market_router)
+app.include_router(backtest_router)
+
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"message": "Crypto Boom!"}
 
 
 async def market_snapshot_loop():
@@ -19,22 +35,12 @@ async def market_snapshot_loop():
         except Exception as e:
             print("❌ Snapshot error:", e)
 
-        await asyncio.sleep(60)  # run every 60 seconds
+        await asyncio.sleep(60)
 
 
 @app.on_event("startup")
 async def startup() -> None:
-    # 1️⃣ Ensure DB tables exist
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # 2️⃣ Start background snapshot loop
     asyncio.create_task(market_snapshot_loop())
-
-
-app.include_router(market_router)
-
-
-@app.get("/")
-def root() -> dict[str, str]:
-    return {"message": "Crypto Boom!"}

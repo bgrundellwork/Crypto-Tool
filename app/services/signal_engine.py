@@ -1,21 +1,32 @@
 def leverage_cap_from_vol(atr: float, price: float) -> int:
     """
     Conservative leverage cap based on ATR/price.
-    You can tune later. These defaults are designed to keep you alive.
+    Designed to keep leverage traders alive during regime changes.
     """
     r = atr / price
 
-    if r >= 0.006:   # 0.6% per candle = chaos
+    if r >= 0.006:   # ~0.6% per candle → chaos / liquidation risk
         return 1
-    if r >= 0.004:   # high vol
+    if r >= 0.004:   # high volatility
         return 2
-    if r >= 0.0025:  # normal
+    if r >= 0.0025:  # normal volatility
         return 3
-    return 5         # low vol
+    return 5         # low volatility
 
 
-def classify_confidence(trend: str, momentum: str, vol: str, vwap_ok: bool) -> str:
+def classify_confidence(
+    trend: str,
+    momentum: str,
+    vol: str,
+    vwap_ok: bool,
+    vov_state: str,
+) -> str:
+    """
+    Confidence is about how reliable the *state classification* is,
+    not whether a trade should be taken.
+    """
     score = 0
+
     if trend in ("bullish", "bearish"):
         score += 1
     if momentum == "strong":
@@ -24,10 +35,12 @@ def classify_confidence(trend: str, momentum: str, vol: str, vwap_ok: bool) -> s
         score += 1
     if vwap_ok:
         score += 1
+    if vov_state == "stable":
+        score += 1
 
-    if score >= 3:
+    if score >= 4:
         return "high"
-    if score == 2:
+    if score >= 2:
         return "medium"
     return "low"
 
@@ -41,30 +54,44 @@ def compute_signal(
     price: float,
     vwap: float,
     atr: float,
+    vov_state: str = "stable",
 ) -> dict:
     """
-    Institutional-style decision output.
-    Returns bias + constraints (not a trade order).
+    Institutional decision engine.
+    Outputs bias + constraints — NEVER an order.
     """
+
     reasons: list[str] = []
 
+    # VWAP deviation (%)
     vwap_dev_pct = ((price - vwap) / vwap) * 100 if vwap else 0.0
 
-    # Location filter (VWAP)
+    # Location
     above_vwap = price > vwap
     below_vwap = price < vwap
 
-    # No-trade conditions (risk kill-switch)
+    # ----------------------------
+    # RISK KILL SWITCHES
+    # ----------------------------
     no_trade = False
+
     if vol == "high":
         no_trade = True
         reasons.append("Volatility high: stand down")
 
-    # Default action
+    if vov_state == "unstable":
+        no_trade = True
+        reasons.append("VoV unstable: volatility regime shifting (kill switch)")
+
+    # ----------------------------
+    # DEFAULT STATE
+    # ----------------------------
     action = "neutral"
     vwap_ok = False
 
-    # Long bias conditions
+    # ----------------------------
+    # LONG BIAS LOGIC
+    # ----------------------------
     if not no_trade and trend == "bullish":
         reasons.append("Bullish regime: price > EMA50")
 
@@ -80,10 +107,10 @@ def compute_signal(
         elif momentum == "normal" and vwap_ok:
             action = "long_bias_low_conviction"
             reasons.append("Momentum normal: bias only")
-        else:
-            action = "neutral"
 
-    # Short bias conditions
+    # ----------------------------
+    # SHORT BIAS LOGIC
+    # ----------------------------
     if not no_trade and trend == "bearish":
         reasons.append("Bearish regime: price < EMA50")
 
@@ -99,19 +126,37 @@ def compute_signal(
         elif momentum == "normal" and vwap_ok:
             action = "short_bias_low_conviction"
             reasons.append("Momentum normal: bias only")
-        else:
-            action = "neutral"
 
-    # Confidence & leverage cap
-    confidence = classify_confidence(trend, momentum, vol, vwap_ok)
+    # ----------------------------
+    # LEVERAGE CONTROL
+    # ----------------------------
     lev_cap = leverage_cap_from_vol(atr, price)
 
+    if vov_state == "rising":
+        lev_cap = max(1, lev_cap - 1)
+        reasons.append("VoV rising: reduced leverage cap")
+
+    # ----------------------------
+    # CONFIDENCE
+    # ----------------------------
+    confidence = classify_confidence(
+        trend=trend,
+        momentum=momentum,
+        vol=vol,
+        vwap_ok=vwap_ok,
+        vov_state=vov_state,
+    )
+
+    # ----------------------------
+    # FINAL OUTPUT
+    # ----------------------------
     return {
         "coin": coin,
         "interval": interval,
         "trend": trend,
         "volatility": vol,
         "momentum": momentum,
+        "vov_state": vov_state,
         "price": price,
         "vwap": vwap,
         "atr": atr,
