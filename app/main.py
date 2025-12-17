@@ -15,6 +15,24 @@ from app.services.market_storage import store_market_snapshots
 # Scheduler
 from app.jobs.scheduler import start_scheduler
 
+# app/main.py (only the relevant bits)
+from app.db.bootstrap import ensure_db_primitives
+from app.jobs.scheduler import start_scheduler, stop_scheduler
+from app.config.settings import get_settings
+
+@app.on_event("startup")
+async def on_startup():
+    await ensure_db_primitives()
+    # keep your existing startup logic here...
+    if get_settings().INGEST_ENABLED:
+        start_scheduler()
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    # keep your existing shutdown logic here...
+    await stop_scheduler()
+
+
 
 app = FastAPI(title="Crypto Market API")
 
