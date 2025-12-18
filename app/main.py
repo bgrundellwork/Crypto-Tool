@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.market import router as market_router
 from app.api.backtest import router as backtest_router
+from app.api.health import router as health_router
 
 from app.config.settings import get_settings
 from app.db.session import engine, Base
@@ -17,6 +18,7 @@ from app.jobs.snapshot_collector import start_snapshot_collector, stop_snapshot_
 app = FastAPI(title="Crypto Market API")
 
 # Routers
+app.include_router(health_router)
 app.include_router(market_router)
 app.include_router(backtest_router)
 
@@ -35,18 +37,21 @@ async def on_startup() -> None:
     # Ensure indexes/uniques (best-effort)
     await ensure_db_primitives()
 
-    s = get_settings()
+    settings = get_settings()  # ✅ this is the key fix (no more NameError: s)
 
     # Start snapshot collector (raw data spine)
-    if s.SNAPSHOT_ENABLED:
+    if settings.SNAPSHOT_ENABLED:
         start_snapshot_collector()
 
     # Start candle scheduler (derived data spine)
-    if s.INGEST_ENABLED:
-        start_scheduler()
+    if settings.INGEST_ENABLED:
+        app.state.scheduler = start_scheduler()  # ✅ allows /ready to see scheduler
+    else:
+        app.state.scheduler = None
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     await stop_scheduler()
+    app.state.scheduler = None
     await stop_snapshot_collector()
