@@ -1,16 +1,25 @@
 # app/api/health.py
+from __future__ import annotations
+
+import importlib
 import time
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Response
 from sqlalchemy import text
 
 from app.db.session import engine
+from app.utils.readiness import annotate_scheduler_jobs
 
 router = APIRouter(tags=["health"])
 
+APP_STARTED_AT = time.time()
 
+
+# ----------------------------
+# Timestamp normalization
+# ----------------------------
 def _normalize_ts(value: Any) -> Tuple[Optional[int], Optional[str]]:
     """
     Returns (unix_seconds, iso_z) from a DB timestamp value.
@@ -32,7 +41,6 @@ def _normalize_ts(value: Any) -> Tuple[Optional[int], Optional[str]]:
         return int(dt.timestamp()), dt.isoformat().replace("+00:00", "Z")
 
     if isinstance(value, str):
-        # Handles: "2025-12-17 17:35:00.000000" and ISO-like strings
         s = value.strip().replace("Z", "+00:00")
         try:
             dt = datetime.fromisoformat(s)
@@ -49,80 +57,251 @@ def _normalize_ts(value: Any) -> Tuple[Optional[int], Optional[str]]:
     return None, None
 
 
-@router.get("/live")
-async def live():
-    return {"status": "ok"}
+def _now_meta() -> Dict[str, Any]:
+    now_ts = time.time()
+    now_dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
+    return {
+        "now_ts": now_ts,
+        "now_unix": int(now_ts),
+        "now_iso": now_dt.isoformat().replace("+00:00", "Z"),
+        "uptime_s": int(now_ts - APP_STARTED_AT),
+    }
 
 
-@router.get("/ready")
-async def ready(request: Request, response: Response):
-    t0 = time.perf_counter()
-    checks = {}
-    ok = True
-
-    # DB + candles
+# ----------------------------
+# Async DB checks (your engine is AsyncEngine)
+# ----------------------------
+async def _check_db() -> Dict[str, Any]:
+    t0 = time.time()
     try:
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-            checks["db"] = {"ok": True}
+        return {"ok": True, "latency_ms": int((time.time() - t0) * 1000)}
+    except Exception as e:
+        return {
+            "ok": False,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "error": str(e),
+        }
 
-            result = await conn.execute(
+
+async def _check_candles_latest() -> Dict[str, Any]:
+    """
+    Confirms candles table readable and returns latest candle ts in unix + iso.
+    """
+    t0 = time.time()
+    try:
+        async with engine.connect() as conn:
+            res = await conn.execute(
                 text(
                     """
-                    SELECT coin, interval, ts
+                    SELECT coin, interval, ts, open, high, low, close, volume
                     FROM candles
                     ORDER BY ts DESC
                     LIMIT 1
                     """
                 )
             )
-            row = result.mappings().first()
-            latest = dict(row) if row else None
+            row = res.mappings().first()
 
-            if latest and "ts" in latest:
-                ts_unix, ts_iso = _normalize_ts(latest["ts"])
-                latest["ts_unix"] = ts_unix
-                latest["ts_iso"] = ts_iso
+        if not row:
+            return {
+                "ok": False,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "error": "candles table readable but empty",
+            }
 
-            checks["candles"] = {"ok": True, "latest": latest}
+        ts_unix, ts_iso = _normalize_ts(row.get("ts"))
+        return {
+            "ok": True,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "latest": {
+                "coin": row.get("coin"),
+                "interval": row.get("interval"),
+                "ts_unix": ts_unix,
+                "ts_iso": ts_iso,
+                "open": row.get("open"),
+                "high": row.get("high"),
+                "low": row.get("low"),
+                "close": row.get("close"),
+                "volume": row.get("volume"),
+            },
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "error": str(e),
+        }
 
-    except Exception:
-        ok = False
-        checks["db"] = {"ok": False}
-        checks["candles"] = {"ok": False}
 
-    # Scheduler (always reported)
-    sch = getattr(request.app.state, "scheduler", "missing")
+# ----------------------------
+# Scheduler status loader (dynamic)
+# ----------------------------
+def _try_get_scheduler_status() -> Optional[Dict[str, Any]]:
+    """
+    Tries common patterns to pull scheduler state from your codebase.
 
-    if sch == "missing":
-        checks["scheduler"] = {"ok": False, "reason": "app.state.scheduler not set"}
-        ok = False
-    elif sch is None:
-        checks["scheduler"] = {"ok": False, "reason": "scheduler not started (None) or start_scheduler() returned None"}
-        ok = False
-    else:
-        if hasattr(sch, "info"):
-            s_info = sch.info()
-            checks["scheduler"] = s_info
-            if not bool(s_info.get("ok", False)):
-                ok = False
-        else:
-            checks["scheduler"] = {"ok": True, "type": type(sch).__name__}
+    BEST PRACTICE:
+      Expose a function in your scheduler module:
+        def get_scheduler_status() -> dict: return SCHEDULER_STATUS
+    """
+    candidates = [
+        # Most common / recommended
+        ("app.jobs.scheduler", "get_scheduler_status"),
+        ("app.jobs.scheduler", "get_status"),
 
-    duration_ms = int((time.perf_counter() - t0) * 1000)
+        # Fallbacks people often use
+        ("app.jobs.scheduler", "status"),
+        ("app.jobs.scheduler", "scheduler_status"),
+        ("app.jobs.scheduler", "SCHEDULER_STATUS"),
+        ("app.jobs.scheduler", "SCHEDULER_STATE"),
+        ("app.jobs.scheduler", "STATE"),
 
-    body = {
-        "status": "ok" if ok else "degraded",
-        "checks": checks,
-        "duration_ms": duration_ms,
+        # Alternate module names (if you named it differently)
+        ("app.jobs.scheduler_service", "get_scheduler_status"),
+        ("app.jobs.job_scheduler", "get_scheduler_status"),
+        ("app.services.scheduler", "get_scheduler_status"),
+        ("app.scheduler", "get_scheduler_status"),
+    ]
+
+    for module_name, attr in candidates:
+        try:
+            mod = importlib.import_module(module_name)
+        except Exception:
+            continue
+
+        if not hasattr(mod, attr):
+            continue
+
+        obj = getattr(mod, attr)
+
+        try:
+            status = obj() if callable(obj) else obj
+        except Exception:
+            continue
+
+        if isinstance(status, dict):
+            return status
+
+    return None
+
+
+def _normalize_scheduler_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = dict(raw)
+
+    meta = out.get("meta") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    for k in ("pid", "started_at", "uptime_s"):
+        if k in out and k not in meta:
+            meta[k] = out.get(k)
+    out["meta"] = meta
+
+    if "running" not in out:
+        out["running"] = True
+
+    if "per_job" not in out:
+        out["per_job"] = {}
+
+    return out
+
+
+def _check_scheduler() -> Dict[str, Any]:
+    t0 = time.time()
+    raw = _try_get_scheduler_status()
+    if raw is None:
+        return {
+            "ok": False,
+            "running": False,
+            "latency_ms": int((time.time() - t0) * 1000),
+            "error": "scheduler status unavailable (no accessor found)",
+            "per_job": {},
+            "meta": {},
+        }
+
+    sched = _normalize_scheduler_payload(raw)
+    sched["latency_ms"] = int((time.time() - t0) * 1000)
+
+    if "ok" not in sched:
+        sched["ok"] = True
+
+    return sched
+
+
+# ----------------------------
+# Payload builder
+# ----------------------------
+async def build_ready_payload() -> Dict[str, Any]:
+    timing = _now_meta()
+
+    db_check = await _check_db()
+    candles_check = await _check_candles_latest()
+    scheduler_check = _check_scheduler()
+
+    return {
+        "status": "ok",
+        **timing,
+        "checks": {
+            "db": db_check,
+            "candles": candles_check,
+            "scheduler": scheduler_check,
+        },
     }
 
-    if not ok:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
-    return body
+# ----------------------------
+# Endpoints
+# ----------------------------
+@router.get("/live")
+async def live():
+    return {"status": "ok"}
+
+
+@router.get("/ready")
+async def ready(response: Response):
+    payload = await build_ready_payload()
+    checks = payload.get("checks", {})
+
+    degraded_reasons = []
+
+    if not (checks.get("db") or {}).get("ok", False):
+        degraded_reasons.append("db_unhealthy")
+
+    if not (checks.get("candles") or {}).get("ok", False):
+        degraded_reasons.append("candles_unhealthy")
+
+    scheduler = checks.get("scheduler", {})
+    if scheduler and scheduler.get("running"):
+        scheduler, stale = annotate_scheduler_jobs(scheduler)
+        checks["scheduler"] = scheduler
+
+        if stale:
+            degraded_reasons.append("scheduler_stalled_jobs")
+            payload["stale_jobs"] = stale
+            scheduler["ok"] = False
+        else:
+            scheduler["ok"] = True
+    else:
+        # Treat as degraded unless you intentionally run without scheduler
+        if scheduler and not scheduler.get("ok", True):
+            degraded_reasons.append("scheduler_unavailable")
+
+    if degraded_reasons:
+        payload["status"] = "degraded"
+        payload["degraded"] = True
+        payload["degraded_reasons"] = degraded_reasons
+        response.status_code = 503
+    else:
+        payload["status"] = "ok"
+        payload["degraded"] = False
+        payload["degraded_reasons"] = []
+
+    payload["checks"] = checks
+    return payload
 
 
 @router.get("/health")
-async def health(request: Request, response: Response):
-    return await ready(request, response)
+async def health(response: Response):
+    # Deep health == readiness here
+    return await ready(response)

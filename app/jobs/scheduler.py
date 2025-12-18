@@ -124,17 +124,18 @@ def _now_epoch() -> float:
 class SchedulerState:
     started: bool = False
     stop_event: Optional[asyncio.Event] = None
-    tasks: Dict[str, asyncio.Task] = field(default_factory=dict)      # job_id -> task
-    locks: Dict[str, asyncio.Lock] = field(default_factory=dict)      # job_id -> lock
+    tasks: Dict[str, asyncio.Task] = field(default_factory=dict)         # job_id -> task
+    locks: Dict[str, asyncio.Lock] = field(default_factory=dict)         # job_id -> lock
     lock_path: Optional[str] = None
     meta: Dict[str, Any] = field(default_factory=dict)
-    job_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # job_id -> stats
+    job_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)   # job_id -> stats
 
 
 @dataclass(frozen=True)
 class SchedulerHandle:
     """
     Stored in app.state.scheduler so /ready can report scheduler status.
+    Health can also import get_scheduler_status() from this module.
     """
     _state: SchedulerState
 
@@ -159,12 +160,13 @@ class SchedulerHandle:
             "uptime_s": int(_now_epoch() - started_at_f) if started_at_f else None,
             "meta": {
                 **meta,
+                "pid": os.getpid(),
                 "started_at_iso": _iso_z_from_epoch(started_at_f),
             },
             "per_job": {},
         }
 
-        # Small, stable per-job health signal
+        # Stable per-job snapshot
         for job_id, s in self._state.job_stats.items():
             info["per_job"][job_id] = {
                 "coin": s.get("coin"),
@@ -213,7 +215,6 @@ def _schedule_seconds_for(interval: str) -> int:
 # ----------------------------
 async def _job_loop(job_id: str, symbol: str, interval: str, stop_event: asyncio.Event, lock: asyncio.Lock) -> None:
     schedule_seconds = _schedule_seconds_for(interval)
-
     next_tick = time.monotonic()  # run immediately once
 
     while not stop_event.is_set():
@@ -250,9 +251,8 @@ async def _job_loop(job_id: str, symbol: str, interval: str, stop_event: asyncio
             dt_ms = int((time.perf_counter() - t0) * 1000)
             js = _state.job_stats[job_id]
             js["last_error_ts"] = _now_epoch()
-            js["last_error"] = (repr(e)[:300])  # bounded for payload sanity
+            js["last_error"] = (repr(e)[:300])  # bounded
             js["consecutive_failures"] = int(js.get("consecutive_failures", 0)) + 1
-
             logger.exception("❌ ingest job error | %s | %dms", job_id, dt_ms)
 
         next_tick += schedule_seconds
@@ -363,3 +363,29 @@ async def stop_scheduler(timeout_s: float = 6.0) -> None:
         _state.job_stats.clear()
 
     logger.info("🛑 candle scheduler stopped")
+
+
+# ----------------------------
+# Readiness export (for /ready)
+# ----------------------------
+def get_scheduler_status() -> Dict[str, Any]:
+    """
+    Stable accessor consumed by /ready.
+    Returns the live scheduler snapshot with per_job stats.
+    Must never throw.
+    """
+    try:
+        return SchedulerHandle(_state).info()
+    except Exception as e:
+        return {
+            "ok": False,
+            "running": False,
+            "error": f"get_scheduler_status failed: {e}",
+            "per_job": {},
+            "meta": {},
+        }
+
+
+# Optional aliases
+get_status = get_scheduler_status
+scheduler_status = get_scheduler_status
