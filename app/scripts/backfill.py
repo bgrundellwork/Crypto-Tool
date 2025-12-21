@@ -6,7 +6,8 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from app.db.session import session_factory, engine
-from app.services.ingestion.gap_detector import get_existing_candle_times, detect_gaps
+from app.db.invariants import verify_candle_invariants
+from app.services.completeness import generate_gap_report, ensure_no_gaps, DataIncompleteError
 from app.services.ingestion.candles_ingestion import ingest_range
 
 
@@ -19,18 +20,23 @@ async def run(coin: str, interval: str, start: datetime, end: datetime) -> None:
     end = end.astimezone(timezone.utc)
 
     async with session_factory() as session:
-        existing = await get_existing_candle_times(session, coin, interval, start, end)
-        gaps = detect_gaps(existing, interval, start, end)
+        report = await generate_gap_report(
+            session,
+            coin=coin,
+            interval=interval,
+            start_ts=start,
+            end_ts=end,
+        )
 
-    if not gaps:
+    if not report.gaps_found:
         print("✅ no gaps detected")
         return
 
-    print(f"🧩 gaps detected: {len(gaps)}")
+    print(f"🧩 gaps detected: {report.gap_count}")
     total_inserted = 0
 
-    for g in gaps:
-        print(f"⛏️ filling gap: {g.start.isoformat()} -> {g.end.isoformat()}")
+    for g in report.gaps:
+        print(f"⛏️ filling gap: {g.start.isoformat()} -> {g.end.isoformat()} | missing={g.missing_candles}")
         async with session_factory() as session:
             inserted = await ingest_range(
                 session=session,
@@ -39,8 +45,21 @@ async def run(coin: str, interval: str, start: datetime, end: datetime) -> None:
                 start_ts=g.start,
                 end_ts=g.end,
             )
+            await verify_candle_invariants(session)
         total_inserted += inserted
         print(f"✅ inserted={inserted}")
+
+    async with session_factory() as session:
+        try:
+            await ensure_no_gaps(
+                session,
+                coin=coin,
+                interval=interval,
+                start_ts=start,
+                end_ts=end,
+            )
+        except DataIncompleteError as err:
+            raise SystemExit(f"❌ gaps remain after backfill: {err.report.to_dict()}") from err
 
     print(f"🏁 backfill complete | total_inserted={total_inserted}")
 
@@ -76,4 +95,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

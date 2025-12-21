@@ -1,10 +1,13 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, DateTime, UniqueConstraint, Index
 from datetime import datetime
 from app.db.session import Base
 
 
 class MarketSnapshot(Base):
     __tablename__ = "market_snapshots"
+    __table_args__ = (
+        UniqueConstraint("coin_id", "timestamp", name="uq_market_snapshots_coin_ts"),
+    )
 
     id = Column(Integer, primary_key=True)
     coin_id = Column(String, index=True)
@@ -17,7 +20,7 @@ class MarketSnapshot(Base):
 class Candle(Base):
     __tablename__ = "candles"
     __table_args__ = (
-        UniqueConstraint("source", "coin", "interval", "ts", name="uq_candles_source_coin_interval_ts"),
+        UniqueConstraint("coin", "interval", "ts", name="uq_candles_coin_interval_ts"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -36,3 +39,11 @@ class Candle(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index(
+    "ix_candles_coin_interval_ts_desc",
+    Candle.coin,
+    Candle.interval,
+    Candle.ts.desc(),
+)
