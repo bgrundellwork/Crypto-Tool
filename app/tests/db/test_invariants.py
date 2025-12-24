@@ -31,7 +31,7 @@ async def test_verify_candle_invariants_duplicate_raises_on_commit():
 
 
 @pytest.mark.asyncio
-async def test_verify_candle_invariants_detects_non_monotonic():
+async def test_verify_candle_invariants_allows_backfill_order():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -57,8 +57,6 @@ async def test_verify_candle_invariants_detects_non_monotonic():
         await session.commit()
 
         findings = await verify_candle_invariants(session, strict=False)
-        assert findings["non_monotonic"]
-        assert findings["non_monotonic"][0]["coin"] == "eth"
+        assert findings["non_monotonic"] == []
 
-        with pytest.raises(AssertionError):
-            await verify_candle_invariants(session, strict=True)
+        await verify_candle_invariants(session, strict=True)

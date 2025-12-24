@@ -58,6 +58,14 @@ async def run_backtest_on_candles(
         return {
             "status": "insufficient_data",
             "received_candles": len(candles),
+            "initial_capital": initial_capital,
+            "final_capital": initial_capital,
+            "total_return_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "trades": 0,
+            "win_rate_pct": 0.0,
+            "equity_curve": [initial_capital],
+            "trade_list": [],
         }
 
     closes = [c["close"] for c in candles]

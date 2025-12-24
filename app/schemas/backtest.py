@@ -13,6 +13,7 @@ class BacktestRunRequest(BaseModel):
 
     coin: str = Field(..., description="Asset symbol to backtest, e.g. btc")
     interval: str = Field("15m", description="Candle interval such as 5m, 15m, 1h")
+    code_hash: str = Field("unknown", min_length=1, description="Git or code hash for reproducibility")
 
     start_ts: Optional[datetime] = Field(
         default=None,

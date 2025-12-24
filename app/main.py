@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from app.api.market import router as market_router
 from app.api.backtest import router as backtest_router
 from app.api.health import router as health_router
+from app.api.features import router as features_router
+from app.api.registry import router as registry_router
 
 from app.config.settings import get_settings
 from app.db.session import engine, Base
@@ -21,6 +23,8 @@ app = FastAPI(title="Crypto Market API")
 app.include_router(health_router)
 app.include_router(market_router)
 app.include_router(backtest_router)
+app.include_router(features_router)
+app.include_router(registry_router)
 
 
 @app.get("/")

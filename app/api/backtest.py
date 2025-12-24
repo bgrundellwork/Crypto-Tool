@@ -11,6 +11,8 @@ from app.config.timeframes import TIMEFRAME_PROFILES
 from app.db.session import session_factory
 from app.services.candle_reader import fetch_candles_from_db
 from app.services.backtest_engine import run_backtest_on_candles
+from app.services.backtest_registry import BacktestRunPayload, save_run
+from app.utils.determinism import hash_candles
 from app.schemas.backtest import (
     BacktestRunRequest,
     InsufficientDataDetail,
@@ -24,7 +26,7 @@ from app.utils.intervals import get_interval_seconds
 router = APIRouter(prefix="/backtest", tags=["backtest"])
 
 
-_REQUEST_FIELDS = frozenset(BacktestRunRequest.__fields__.keys())
+_REQUEST_FIELDS = frozenset(BacktestRunRequest.model_fields.keys())
 
 
 def _error_response(
@@ -105,7 +107,7 @@ def _insufficient_data_response(
 
     return JSONResponse(
         status_code=200,
-        content=InsufficientDataResponse(message=message, detail=detail).dict(),
+        content=InsufficientDataResponse(message=message, detail=detail).model_dump(),
     )
 
 
@@ -141,7 +143,7 @@ def _derive_range(
 
 
 @router.post("/run")
-async def run_backtest(request: Request, payload: BacktestRunRequest):
+async def run_backtest(payload: BacktestRunRequest, request: Request):
     offending = _offending_query_params(request.query_params.keys())
     if offending:
         return _error_response(
@@ -229,5 +231,37 @@ async def run_backtest(request: Request, payload: BacktestRunRequest):
     result["coin"] = payload.coin
     result["interval"] = payload.interval
     result["candles_used"] = len(candles)
+
+    summary = {
+        "status": result.get("status"),
+        "initial_capital": result.get("initial_capital"),
+        "final_capital": result.get("final_capital"),
+        "total_return_pct": result.get("total_return_pct"),
+        "max_drawdown_pct": result.get("max_drawdown_pct"),
+        "trades": result.get("trades"),
+        "win_rate_pct": result.get("win_rate_pct"),
+    }
+
+    payload_inputs = payload.model_dump()
+    code_hash = payload_inputs.pop("code_hash", None)
+    if not code_hash:
+        code_hash = "unknown"
+
+    async with session_factory() as session:
+        if hasattr(session, "execute"):
+            data_hash = hash_candles(candles)
+            persisted = await save_run(
+                session,
+                BacktestRunPayload(
+                    strategy_name=f"{payload.coin}_{payload.interval}",
+                    inputs=payload_inputs,
+                    summary=summary,
+                    trades=result.get("trade_list", []),
+                    equity_curve=result.get("equity_curve", []),
+                    code_hash=code_hash,
+                    data_hash=data_hash,
+                ),
+            )
+            result["run_id"] = persisted.id
 
     return result

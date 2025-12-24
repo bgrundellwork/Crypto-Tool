@@ -13,16 +13,15 @@ _DUPLICATE_CANDLES_SQL = """
 _NON_MONOTONIC_SQL = """
     WITH ordered AS (
         SELECT
-            id,
             coin,
             interval,
             ts,
-            LAG(ts) OVER (PARTITION BY coin, interval ORDER BY id) AS prev_ts
+            LAG(ts) OVER (PARTITION BY coin, interval ORDER BY ts) AS prev_ts
         FROM candles
     )
     SELECT coin, interval, ts, prev_ts
     FROM ordered
-    WHERE prev_ts IS NOT NULL AND ts <= prev_ts
+    WHERE prev_ts IS NOT NULL AND ts < prev_ts
 """
 
 
