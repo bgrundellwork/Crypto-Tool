@@ -4,3 +4,9 @@ version = "0.1.0"
 
 [tool.setuptools]
 packages = ["app"]
+
+[tool.pytest.ini_options]
+cache_dir = ".pytest_cache_local"
+filterwarnings = [
+    "error",
+]

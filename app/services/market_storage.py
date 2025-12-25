@@ -1,8 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.db.models import MarketSnapshot
+from app.utils.time import utcnow
 
 
 WRITE_WINDOW_SECONDS = 60  # dedupe window
@@ -10,7 +11,7 @@ WRITE_WINDOW_SECONDS = 60  # dedupe window
 
 async def store_market_snapshots(market_data: list[dict]) -> None:
     async with SessionLocal() as session:
-        now = datetime.utcnow()
+        now = utcnow()
         cutoff = now - timedelta(seconds=WRITE_WINDOW_SECONDS)
 
         for coin in market_data:

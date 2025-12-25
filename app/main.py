@@ -34,14 +34,14 @@ def root() -> dict[str, str]:
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    # Ensure tables exist
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    settings = get_settings()  # ✅ this is the key fix (no more NameError: s)
+
+    if settings.DB_AUTO_CREATE:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     # Ensure indexes/uniques (best-effort)
     await ensure_db_primitives()
-
-    settings = get_settings()  # ✅ this is the key fix (no more NameError: s)
 
     # Start snapshot collector (raw data spine)
     if settings.SNAPSHOT_ENABLED:

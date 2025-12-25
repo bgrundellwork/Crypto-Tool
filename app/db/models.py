@@ -1,8 +1,8 @@
-from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text, UniqueConstraint, Index
 from app.db.session import Base
+from app.utils.time import utcnow
 
 
 class MarketSnapshot(Base):
@@ -16,7 +16,7 @@ class MarketSnapshot(Base):
     price = Column(Float)
     market_cap = Column(Float)
     volume = Column(Float)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime(timezone=True), default=utcnow)
 
 
 class Candle(Base):
@@ -31,7 +31,7 @@ class Candle(Base):
     coin = Column(String, nullable=False, index=True)
     interval = Column(String, nullable=False, index=True)
 
-    ts = Column(DateTime, nullable=False, index=True)  # candle open time (UTC)
+    ts = Column(DateTime(timezone=True), nullable=False, index=True)  # candle open time (UTC)
 
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
@@ -39,8 +39,8 @@ class Candle(Base):
     close = Column(Float, nullable=False)
     volume = Column(Float, nullable=False, default=0.0)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 Index(
@@ -71,14 +71,14 @@ class FeatureRow(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     coin = Column(String, nullable=False, index=True)
     interval = Column(String, nullable=False, index=True)
-    ts = Column(DateTime, nullable=False, index=True)
+    ts = Column(DateTime(timezone=True), nullable=False, index=True)
     feature_set = Column(String, nullable=False, default="core_v1")
     schema_version = Column(Integer, nullable=False, default=1)
     params_json = Column(Text, nullable=False)
     values_json = Column(Text, nullable=False)
     data_hash = Column(String, nullable=False)
     code_hash = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 class BacktestRun(Base):
@@ -90,7 +90,7 @@ class BacktestRun(Base):
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid4()))
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     strategy_name = Column(String, nullable=False, index=True)
     inputs_json = Column(Text, nullable=False)
     summary_json = Column(Text, nullable=False)

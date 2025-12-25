@@ -65,6 +65,7 @@ class Settings:
     # DB
     # -------------------------
     MARKET_DB_URL: str = field(default_factory=lambda: os.getenv("MARKET_DB_URL", "sqlite+aiosqlite:///./market.db"))
+    DB_AUTO_CREATE: bool = field(default_factory=lambda: parse_bool(os.getenv("DB_AUTO_CREATE"), True))
 
     # -------------------------
     # Candle ingestion
